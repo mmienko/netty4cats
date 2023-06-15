@@ -1,0 +1,92 @@
+<configuration>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp>
+                    <timeZone>UTC</timeZone>
+                </timestamp>
+                <logstashMarkers/>
+                <mdc/>
+                <arguments/>
+                <pattern>
+                    <pattern>
+                        {
+                            "level" : "%level",
+                            "logger" : "%logger",
+                            "message" : "%message"
+                        }
+                    </pattern>
+                </pattern>
+                <stackTrace>
+                    <fieldName>error-stacktrace</fieldName>
+                    <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                        <maxDepthPerThrowable>30</maxDepthPerThrowable>
+                        <shortenedClassNameLength>20</shortenedClassNameLength>
+                        <rootCauseFirst>true</rootCauseFirst>
+                    </throwableConverter>
+                </stackTrace>
+            </providers>
+        </encoder>
+    </appender>
+
+    <!--  This needs to mirror main  -->
+    <appender name="json-file-appender" class="ch.qos.logback.core.FileAppender">
+        <file>target/test-logs/json-file-appender.log</file>
+        <immediateFlush>true</immediateFlush>
+        <encoder class="net.logstash.logback.encoder.LoggingEventCompositeJsonEncoder">
+            <providers>
+                <timestamp>
+                    <timeZone>UTC</timeZone>
+                </timestamp>
+                <logstashMarkers/>
+                <arguments/>
+                <mdc/>
+                <pattern>
+                    <pattern>
+                        {
+                        "version" : "${VERSION}",
+                        "level" : "%level",
+                        "logger" : "%logger",
+                        "message" : "%message"
+                        }
+                    </pattern>
+                </pattern>
+                <stackTrace>
+                    <fieldName>error-stacktrace</fieldName>
+                    <throwableConverter class="net.logstash.logback.stacktrace.ShortenedThrowableConverter">
+                        <maxDepthPerThrowable>30</maxDepthPerThrowable>
+                        <shortenedClassNameLength>20</shortenedClassNameLength>
+                        <rootCauseFirst>true</rootCauseFirst>
+                    </throwableConverter>
+                </stackTrace>
+            </providers>
+        </encoder>
+    </appender>
+
+    <!-- define an appender exclusively for netty -->
+    <appender name="NETTY" class="ch.qos.logback.core.FileAppender">
+        <file>target/netty.log</file> <!-- "target" to suppress local git modifications -->
+        <append>true</append>
+        <encoder>
+            <pattern>%-4relative [%thread] %-5level %logger{35} - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <root level="WARN">
+        <appender-ref ref="STDOUT"/>
+    </root>
+
+    <!-- additionally, log netty leaks to the netty appender -->
+    <logger name="io.netty.util.ResourceLeakDetector" level="DEBUG">
+        <appender-ref ref="NETTY" />
+    </logger>
+
+    <logger name="json-file-logger" level="INFO" additivity="false">
+        <appender-ref ref="json-file-appender" />
+    </logger>
+
+    <!-- https://github.com/playframework/playframework/pull/8407 -->
+    <shutdownHook class="ch.qos.logback.core.hook.DelayingShutdownHook"/>
+
+</configuration>
