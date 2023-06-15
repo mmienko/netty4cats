@@ -5,7 +5,7 @@ ThisBuild / scalaVersion := "2.13.11"
 ThisBuild / startYear := Some(2023)
 
 lazy val root = (project in file("."))
-  .aggregate(core)
+  .aggregate(core, demo)
 
 lazy val core = (project in file("core"))
   // main source
@@ -44,6 +44,28 @@ lazy val core = (project in file("core"))
       Wart.ExplicitImplicitTypes
     ),
     Test / compile / wartremoverErrors := Warts.unsafe
+      .filterNot(_ == Wart.Any) ++ Seq(
+      Wart.FinalCaseClass,
+      Wart.ExplicitImplicitTypes
+    ),
+    wartremoverExcluded += sourceManaged.value
+  )
+
+lazy val demo = (project in file("demo"))
+  .dependsOn(core)
+  .settings(
+    name := "demo",
+    idePackagePrefix := Some("cats.netty"),
+  )
+  // linting
+  .settings(
+    inThisBuild(
+      Seq(
+        scalafixScalaBinaryVersion := "2.13",
+        addCompilerPlugin(scalafixSemanticdb)
+      )
+    ),
+    Compile / compile / wartremoverErrors := Warts.unsafe
       .filterNot(_ == Wart.Any) ++ Seq(
       Wart.FinalCaseClass,
       Wart.ExplicitImplicitTypes
