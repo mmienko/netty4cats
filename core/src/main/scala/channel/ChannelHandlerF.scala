@@ -1,14 +1,13 @@
 package cats.netty
 package channel
 
+import Utils.ValueDiscard
+import channel.NettyToCatsEffectRuntimeHandler.DefaultLogger
+
 import cats.Applicative
-import cats.effect.{Async, Deferred}
-import cats.syntax.all._
+import cats.effect.Sync
 import io.netty.channel.ChannelHandlerContext
 import org.slf4j.Logger
-
-import cats.netty.Utils.ValueDiscard
-import cats.netty.channel.NettyToCatsEffectRuntimeHandler.DefaultLogger
 
 trait ChannelHandlerF[F[_], I] {
 
@@ -75,14 +74,13 @@ object ChannelHandlerF {
       }
     }
 
-  def asNetty[F[_]: Async, I](
+  def asNetty[F[_]: Sync, I](
     handler: ChannelHandlerF[F, I],
     logger: Logger = DefaultLogger // injectable for testing purposes
   ): F[NettyToCatsEffectRuntimeHandler[F, I]] =
-    Deferred[F, Unit].map(
+    Sync[F].delay(
       new NettyToCatsEffectRuntimeHandler(
         handler,
-        _,
         logger
       ) {}
     )

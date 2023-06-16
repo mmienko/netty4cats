@@ -255,7 +255,9 @@ class HttpHandler[F[_]](
                       handleClosedWebSocket(request, webSocketSession, response)
 
                     case e: Throwable =>
-                      webSocket.closeByServer(WebSocketCloseStatus.INTERNAL_SERVER_ERROR) *>
+                      F.whenA(ctx.channel().isActive)(
+                        webSocket.closeByServer(WebSocketCloseStatus.INTERNAL_SERVER_ERROR)
+                      ) *>
                         logError(request, response.status(), "WebSocket Connect Failed")(e)
                   }
               }

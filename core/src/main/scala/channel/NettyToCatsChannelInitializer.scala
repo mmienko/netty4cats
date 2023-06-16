@@ -22,7 +22,7 @@ class NettyToCatsChannelInitializer[F[_]: Async, C <: Channel](
 ) extends ChannelInitializer[C] {
 
   private val inboundDispAttrKey =
-    AttributeKey.valueOf[(Dispatcher[F], F[Unit])]("AllocatedInboundDispatcher")
+    AttributeKey.valueOf[Dispatcher[F]]("InboundDispatcher")
 
   override def initChannel(ch: C): Unit = {
     // Disable auto-read for each individual connection
@@ -30,18 +30,18 @@ class NettyToCatsChannelInitializer[F[_]: Async, C <: Channel](
 
     dispatcher.unsafeRunAndForget {
       for {
-        /*
-         * Each channel gets their own ordered dispatcher, as IO events are sequential on a per
-         * connection basis. This organization will becomes more important when CE runtime can
-         * backpressure reads. Unordered, i.e. parallel, doesn't work in this case because we don't
-         * want CE runtime to see reads, exceptions, and Netty event come out or order as it might
-         * affect business logic (specifically read timeouts).
-         */
         attr <- Async[F].delay(ch.attr(inboundDispAttrKey))
-
-        allocatedInboundDisp <- Dispatcher.sequential[F](await = true).allocated
-
-        _ <- Async[F].delay(attr.set(allocatedInboundDisp))
+        /*
+         * Each channel gets their own sequential dispatcher to mirror order of Netty events in handler. Netty's
+         * threading model ensures handler has single threaded semantics for Netty events (handler methods).
+         * We ignore Dispatcher's finalizer in `await=true` mode, since all it does is:
+         *  - shutdown the dispatcher
+         *  - join all fibers (in supervisor)
+         * If we had the finalizer, we would run it on channel closed, but that case is a no-op, i.e. either way the
+         * fibers run until they are finished. Using finalizer instead introduces potential bugs and ties up resources.
+         */
+        inboundDisp <- Dispatcher.sequential[F](await = true).allocated.map(_._1)
+        _ <- Async[F].delay(attr.set(inboundDisp))
 
         handlers <- onNewConnection(ch)
 

@@ -30,6 +30,7 @@ class MockWebSocketSession extends WebSocketSession[IO] {
   val closeReason: Deferred[IO, (WebSocketCloseStatus, CloseInitiator)] =
     Deferred.unsafe[IO, (WebSocketCloseStatus, CloseInitiator)]
 
+  private val pipelineEventsQueue = mutable.Queue.empty[AnyRef]
   private val framesQueue: util.Queue[WebSocketFrame] =
     new util.ArrayDeque[WebSocketFrame](100)
 
@@ -66,10 +67,8 @@ class MockWebSocketSession extends WebSocketSession[IO] {
   def hasFrames: Boolean = !framesQueue.isEmpty
 
   override def handlePipelineEvent(evt: AnyRef): IO[Unit] =
-    pipelineEvents.complete(mutable.Queue.empty[AnyRef]) *>
-      pipelineEvents.get
-        .flatMap(q => IO(q.enqueue(evt)))
-        .void
+    IO(pipelineEventsQueue.enqueue(evt)) *>
+      pipelineEvents.complete(pipelineEventsQueue).void
 
   override def handleException(cause: Throwable): IO[Unit] = exception.complete(cause).void
 

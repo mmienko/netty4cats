@@ -387,6 +387,13 @@ class HttpServerChannelInitializerWebSocketSpec extends BaseSpec with BeforeAndA
         _ <- IO(wsRequest.refCnt() shouldBe 0)
 
         _ <- IO(And("channel can cleanly close"))
+        outboundMessages = conn.channel.underlying.outboundMessages()
+        // drop message in case close was processed after WS handshake request. This will allow a clean
+        // finishAndReleaseAll at the end of the test.
+        _ <- IO.whenA(!outboundMessages.isEmpty)(conn.readResponse(_ => ()))
+        _ <- IO.whenA(!outboundMessages.isEmpty)(
+          conn.readWebSocketFrame((_: CloseWebSocketFrame) => ())
+        )
         _ <- conn.finishAndReleaseAll.map(_ shouldBe false)
       } yield ()
     }

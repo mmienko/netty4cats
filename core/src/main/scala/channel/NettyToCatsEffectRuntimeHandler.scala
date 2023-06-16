@@ -2,7 +2,7 @@ package cats.netty
 package channel
 
 import cats.effect.std.Dispatcher
-import cats.effect.{Deferred, Sync}
+import cats.effect.Sync
 import cats.syntax.all._
 import io.netty.channel._
 import io.netty.util.AttributeKey
@@ -24,11 +24,8 @@ import cats.netty.Utils.ValueDiscard
 )
 abstract class NettyToCatsEffectRuntimeHandler[F[_]: Sync, I] private[channel] (
   channelHandler: ChannelHandlerF[F, I],
-  channelInactiveProcessed: Deferred[F, Unit],
   logger: Logger // injectable for testing purposes
 ) extends ChannelDuplexHandler {
-
-  private var isClosed: Boolean = false
 
   /*
   These TypeParameterMatcher is a Netty trick used in SimpleInboundHandler, except we use for both inbound and
@@ -42,15 +39,12 @@ abstract class NettyToCatsEffectRuntimeHandler[F[_]: Sync, I] private[channel] (
   There exists only one per channel.
    */
   private var inboundDispatcher: Dispatcher[F] = null // no boxing
-  private var inboundDispatcherClose: F[Unit] = Sync[F].unit
 
   override def handlerAdded(ctx: ChannelHandlerContext): Unit = {
-    val x = ctx
+    inboundDispatcher = ctx
       .channel()
-      .attr(AttributeKey.valueOf[(Dispatcher[F], F[Unit])]("AllocatedInboundDispatcher"))
+      .attr(AttributeKey.valueOf[Dispatcher[F]]("InboundDispatcher"))
       .get()
-    inboundDispatcher = x._1
-    inboundDispatcherClose = x._2
   }
 
   override def channelRead(ctx: ChannelHandlerContext, msg: Any): Unit =
@@ -86,29 +80,12 @@ abstract class NettyToCatsEffectRuntimeHandler[F[_]: Sync, I] private[channel] (
       errorLogMsg = "channelWritabilityChanged"
     )
 
-  /*
-  Dispatch to handlerF and signal that inbound dispatcher can be be closed
-   */
   override def channelInactive(ctx: ChannelHandlerContext): Unit = {
-    isClosed = true
     dispatch(
-      Sync[F].bracket(Sync[F].unit)(_ => channelHandler.channelInactive(ctx))(_ =>
-        channelInactiveProcessed.complete(()).void
-      ),
+      channelHandler.channelInactive(ctx),
       errorLogMsg = "channelInactive"
     )
   }
-
-  /*
-  Only close inbound dispatcher when channel is "fully" closed, i.e. channelInactive followed by handlerRemoved.
-  At that point the handler will not longer receive Netty events.
-   */
-  override def handlerRemoved(ctx: ChannelHandlerContext): Unit =
-    if (isClosed)
-      dispatch(
-        channelInactiveProcessed.get *> inboundDispatcherClose,
-        errorLogMsg = "handlerRemoved"
-      )
 
   private def dispatch(io: F[Unit], errorLogMsg: => String): Unit =
     try {
