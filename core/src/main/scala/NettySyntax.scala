@@ -4,8 +4,6 @@ import cats.effect.{Async, Sync}
 import cats.syntax.all._
 import io.netty.channel._
 
-import cats.netty.channel.{ChannelHandlerF, NettyToCatsEffectRuntimeHandler}
-
 object NettySyntax {
 
   implicit class ChannelHandlerContextOps[F[_]](ctx: ChannelHandlerContext)(implicit F: Async[F]) {
@@ -36,12 +34,6 @@ object NettySyntax {
 
     def closeF: F[ChannelFuture] = F.delay(ctx.close())
 
-    def addLast[I](
-      handlerName: String,
-      handler: ChannelHandlerF[F, I]
-    ): F[NettyToCatsEffectRuntimeHandler[F, I]] =
-      ChannelHandlerF.asNetty(handler).flatTap(h => addLast(handlerName, h))
-
     private def pipeline = ctx.pipeline()
   }
 
@@ -60,10 +52,6 @@ object NettySyntax {
 
     def addLastF(name: String, handler: ChannelHandler): F[Unit] =
       F.delay(pipeline.addLast(name, handler)).void
-
-    def addLast(
-      handlerF: ChannelHandlerF[F, _]
-    ): F[Unit] = ChannelHandlerF.asNetty(handlerF).flatMap(addLastF(_))
 
     def removeF[H <: ChannelHandler](clazz: Class[H]): F[H] =
       F.delay(pipeline.remove(clazz))

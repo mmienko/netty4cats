@@ -1,25 +1,22 @@
 package cats.netty
 package channel
 
-import Utils.ValueDiscard
-import channel.NettyToCatsEffectRuntimeHandler.DefaultLogger
-
 import cats.Applicative
-import cats.effect.Sync
 import io.netty.channel.ChannelHandlerContext
-import org.slf4j.Logger
+
+import cats.netty.Utils.ValueDiscard
 
 trait ChannelHandlerF[F[_], I] {
 
-  def channelRead(msg: I)(implicit ctx: ChannelHandlerContext): F[Unit]
+  def channelReadF(msg: I)(implicit ctx: ChannelHandlerContext): F[Unit]
 
-  def userEventTriggered(evt: AnyRef)(implicit ctx: ChannelHandlerContext): F[Unit]
+  def userEventTriggeredF(evt: AnyRef)(implicit ctx: ChannelHandlerContext): F[Unit]
 
-  def exceptionCaught(cause: Throwable)(implicit ctx: ChannelHandlerContext): F[Unit]
+  def exceptionCaughtF(cause: Throwable)(implicit ctx: ChannelHandlerContext): F[Unit]
 
-  def channelWritabilityChanged(isWriteable: Boolean)(implicit ctx: ChannelHandlerContext): F[Unit]
+  def channelWritabilityChangedF(isWriteable: Boolean)(implicit ctx: ChannelHandlerContext): F[Unit]
 
-  def channelInactive(implicit ctx: ChannelHandlerContext): F[Unit]
+  def channelInactiveF(implicit ctx: ChannelHandlerContext): F[Unit]
 }
 
 @SuppressWarnings(
@@ -41,10 +38,10 @@ object ChannelHandlerF {
     onRead: (I, ChannelHandlerContext) => F[Unit]
   )(implicit F: Applicative[F]): ChannelHandlerF[F, I] =
     new ChannelHandlerF[F, I] {
-      override def channelRead(msg: I)(implicit ctx: ChannelHandlerContext): F[Unit] =
+      override def channelReadF(msg: I)(implicit ctx: ChannelHandlerContext): F[Unit] =
         onRead(msg, ctx)
 
-      override def userEventTriggered(
+      override def userEventTriggeredF(
         evt: AnyRef
       )(implicit ctx: ChannelHandlerContext): F[Unit] = {
         ValueDiscard[AnyRef](evt)
@@ -52,7 +49,7 @@ object ChannelHandlerF {
         F.unit
       }
 
-      override def exceptionCaught(
+      override def exceptionCaughtF(
         cause: Throwable
       )(implicit ctx: ChannelHandlerContext): F[Unit] = {
         ValueDiscard[Throwable](cause)
@@ -60,7 +57,7 @@ object ChannelHandlerF {
         F.unit
       }
 
-      override def channelWritabilityChanged(
+      override def channelWritabilityChangedF(
         isWriteable: Boolean
       )(implicit ctx: ChannelHandlerContext): F[Unit] = {
         ValueDiscard[Boolean](isWriteable)
@@ -68,21 +65,9 @@ object ChannelHandlerF {
         F.unit
       }
 
-      override def channelInactive(implicit ctx: ChannelHandlerContext): F[Unit] = {
+      override def channelInactiveF(implicit ctx: ChannelHandlerContext): F[Unit] = {
         ValueDiscard[ChannelHandlerContext](ctx)
         F.unit
       }
     }
-
-  def asNetty[F[_]: Sync, I](
-    handler: ChannelHandlerF[F, I],
-    logger: Logger = DefaultLogger // injectable for testing purposes
-  ): F[NettyToCatsEffectRuntimeHandler[F, I]] =
-    Sync[F].delay(
-      new NettyToCatsEffectRuntimeHandler(
-        handler,
-        logger
-      ) {}
-    )
-
 }

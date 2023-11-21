@@ -17,11 +17,10 @@ import cats.syntax.all._
 import io.netty.channel._
 import io.netty.channel.embedded.EmbeddedChannel
 import org.scalatest.BeforeAndAfterAll
+import org.slf4j.Logger
 import org.slf4j.event.Level
 import org.slf4j.helpers.SubstituteLoggerFactory
-import org.slf4j.{Logger, LoggerFactory}
 
-import cats.netty.channel.NettyToCatsEffectRuntimeHandlerSpec.ErrorHandler.TestError
 import cats.netty.channel.NettyToCatsEffectRuntimeHandlerSpec._
 import cats.netty.testkit.EmbeddedChannelF
 
@@ -34,10 +33,26 @@ import cats.netty.testkit.EmbeddedChannelF
 )
 class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAll {
 
+  "handler accepts inbound events of the specified type" in runIOInCurrentThread {
+    class A
+    val handler = new QueueingHandler()
+    for {
+      ch <- makeEmbeddedChannelIO(handler).allocated.map(_._1)
+      _ <- ch.writeAndFlushInbound("1")
+      _ <- ch.processTasksUntil(handler.messages.nonEmpty)
+      _ <- IO(handler.messages.dequeue() shouldBe "1")
+
+      msgProcessedByHandler <- IO(!ch.underlying.writeInbound(new A))
+      _ <- IO(msgProcessedByHandler shouldBe false)
+      _ <- IO(ch.underlying.runPendingTasks())
+      _ <- IO(handler.messages shouldBe empty)
+    } yield ()
+  }
+
   "inbound events from Netty reach CE runtime" in runIOInCurrentThread {
-    val handler = QueueingHandler[Int]()
+    val handler = new QueueingHandler()
     makeEmbeddedChannelIO(handler).use { channel =>
-      generateAllPossibleSequences((1 to 4).toList).traverse { sequence =>
+      generateAllPossibleSequences((1 to 4).map(_.toString).toList).traverse { sequence =>
         for {
           _ <- sequence.traverse {
             case Action.Read(i) =>
@@ -48,7 +63,7 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
               IO(
                 channel.underlying
                   .pipeline()
-                  .fireExceptionCaught(new Throwable(s"unit_test_error ${i.toString}"))
+                  .fireExceptionCaught(new Throwable(s"unit_test_error ${i}"))
               )
           }
 
@@ -63,7 +78,7 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
               IO(handler.events.dequeue() shouldEqual i)
             case Action.Throw(i) =>
               IO(
-                handler.exceptions.dequeue().getMessage shouldEqual s"unit_test_error ${i.toString}"
+                handler.exceptions.dequeue().getMessage shouldEqual s"unit_test_error ${i}"
               )
           }
         } yield ()
@@ -73,11 +88,11 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
 
   // There is no interface to outbound messages, this simply reaffirms Netty's behavior.
   "outbound events from Netty are unaffected by handler" in runIOInCurrentThread {
-    val handler = QueueingHandler[Int]()
+    val handler = new QueueingHandler()
     makeEmbeddedChannelIO(handler).use { channel =>
       for {
         // write but do not flush message
-        _ <- IO(channel.underlying.pipeline().write(1))
+        _ <- IO(channel.underlying.pipeline().write("1"))
 
         // shouldn't be in flushed
         _ <- IO(channel.underlying.runPendingTasks())
@@ -85,11 +100,11 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
 
         // write another message, but flush to client
         promise = channel.underlying.newPromise()
-        _ <- IO(channel.underlying.pipeline().writeAndFlush(2, promise))
+        _ <- IO(channel.underlying.pipeline().writeAndFlush("2", promise))
 
         _ <- channel.processTasksUntil(promise.isDone)
-        _ <- IO(channel.underlying.readOutbound[Int]() shouldEqual 1)
-        _ <- IO(channel.underlying.readOutbound[Int]() shouldEqual 2)
+        _ <- IO(channel.underlying.readOutbound[String]() shouldEqual "1")
+        _ <- IO(channel.underlying.readOutbound[String]() shouldEqual "2")
       } yield ()
     }
   }
@@ -99,11 +114,11 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
       startIO <- Deferred[IO, Unit]
       finishIO <- Deferred[IO, Unit]
       ref <- Ref[IO].of(false)
-      handler = QueueingHandler[Int](onRead =
-        _ => startIO.get *> ref.set(true) *> finishIO.complete(()).void
+      handler = new QueueingHandler(
+        onRead = _ => startIO.get *> ref.set(true) *> finishIO.complete(()).void
       )
       chn <- makeEmbeddedChannelIO(handler).allocated.map(_._1)
-      _ <- chn.writeAndFlushInbound(1)
+      _ <- chn.writeAndFlushInbound("1")
 
       _ <- IO(chn.underlying.pipeline().names().size() shouldBe 2)
       _ <- IO(chn.underlying.pipeline().removeLast())
@@ -120,7 +135,7 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
 
   "closes" - {
     "from Netty reach CE runtime" in runIOInCurrentThread {
-      val handler = QueueingHandler[Int]()
+      val handler = new QueueingHandler()
       makeEmbeddedChannelIO(handler).allocated.map(_._1).flatMap { channel =>
         val cf = channel.underlying.closeFuture()
         // Close signal starts from tail of pipeline, so we're really just testing that ChannelInactive is handled
@@ -132,7 +147,7 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
     }
 
     "double should be idempotent" in runIOInCurrentThread {
-      val handler = QueueingHandler[Int]()
+      val handler = new QueueingHandler()
       makeEmbeddedChannelIO(handler).allocated.map(_._1).flatMap { channel =>
         val cf = channel.underlying.closeFuture()
         // Close signal starts from tail of pipeline, so we're really just testing that ChannelInactive is handled
@@ -148,26 +163,26 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
     }
 
     "long running inbound events are not cancelled on close" in runIOInCurrentThread {
-      val handler = QueueingHandler[Int](onRead = _ => IO.sleep(20.millis))
+      val handler = new QueueingHandler(onRead = _ => IO.sleep(20.millis))
 
       makeEmbeddedChannelIO(handler).allocated.map(_._1).flatMap { channel =>
-        (1 to 5).toList.traverse_(channel.writeAndFlushInbound(_)) *>
+        (1 to 5).toList.map(_.toString).traverse_(channel.writeAndFlushInbound(_)) *>
           channel.close *>
           IO(handler.messages.size should be < 5) *>
           IO(channel.isActive shouldBe false) *>
           channel.processTasksUntil(handler.closes.nonEmpty) *>
           IO.sleep(100.millis) *> // Give time for dispatcher to close
           IO(channel.underlying.runPendingTasks()) *>
-          IO(handler.messages.toList shouldEqual List(1, 2, 3, 4, 5))
+          IO(handler.messages.toList shouldEqual List("1", "2", "3", "4", "5"))
       }
     }
 
     "write activity after channel is closed should have writes fail" in runIOInCurrentThread {
-      makeEmbeddedChannelIO(QueueingHandler[Int]()).allocated.map(_._1).flatMap { channel =>
+      makeEmbeddedChannelIO(new QueueingHandler()).allocated.map(_._1).flatMap { channel =>
         val closeFut = channel.underlying.closeFuture()
         channel.close *>
           channel.processTasksUntil(closeFut.isDone) *>
-          channel.writeOutbound(1).flatMap { cf =>
+          channel.writeOutbound("1").flatMap { cf =>
             IO(cf.isDone shouldBe true) *>
               IO(cf.isSuccess shouldBe false) *>
               IO(cf.cause() shouldBe a[ClosedChannelException]).void
@@ -178,10 +193,9 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
 
   "an exception from CE runtime gets logged" in runIOInCurrentThread {
     val factory = new SubstituteLoggerFactory
-    val logger = factory.getLogger("unit-test-logger")
-    val handler = new ErrorHandler
+    val handler = new ErrorHandler(logger = factory.getLogger("unit-test-logger"))
 
-    makeEmbeddedChannelIO[Any](handler, logger).use { channel =>
+    makeEmbeddedChannelIO[Any](handler).use { channel =>
       def assertErrorLog(msg: String, error: Throwable) =
         channel.processTasksUntil(factory.getEventQueue.size() == 1) *>
           IO(withClue(msg)(factory.getEventQueue.size() shouldEqual 1)) *>
@@ -222,26 +236,37 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
   }
 
   "piping an inbound message to outbound with semantic blocking should not block outbound message from being sent" in runIOInCurrentThread {
-    val handler = ChannelHandlerF.onlyChannelRead[IO, Int] { (msg, ctx) =>
-      IO.async_[Unit] { cb =>
-        val _ = ctx
-          .pipeline()
-          .writeAndFlush(msg)
-          .addListener(new ChannelFutureListener {
-            override def operationComplete(future: ChannelFuture): Unit = {
-              if (future.isSuccess)
-                cb(().asRight[Throwable])
-              else
-                cb(future.cause().asLeft[Unit])
-            }
-          })
-      }
+    val handler = new NettyToCatsEffectRuntimeHandler[IO, String]() {
+      override def channelReadF(msg: String)(implicit ctx: ChannelHandlerContext): IO[Unit] =
+        IO.async_[Unit] { cb =>
+          val _ = ctx
+            .pipeline()
+            .writeAndFlush(msg)
+            .addListener(new ChannelFutureListener {
+              override def operationComplete(future: ChannelFuture): Unit = {
+                if (future.isSuccess)
+                  cb(().asRight[Throwable])
+                else
+                  cb(future.cause().asLeft[Unit])
+              }
+            })
+        }
+      override protected def userEventTriggeredF(evt: AnyRef)(implicit
+        ctx: ChannelHandlerContext
+      ): IO[Unit] = IO.unit
+      override protected def exceptionCaughtF(cause: Throwable)(implicit
+        ctx: ChannelHandlerContext
+      ): IO[Unit] = IO.unit
+      override protected def channelWritabilityChangedF(isWriteable: Boolean)(implicit
+        ctx: ChannelHandlerContext
+      ): IO[Unit] = IO.unit
+      override protected def channelInactiveF(implicit ctx: ChannelHandlerContext): IO[Unit] =
+        IO.unit
     }
-
     makeEmbeddedChannelIO(handler).use { channel =>
-      channel.writeAndFlushInbound(1) *>
+      channel.writeAndFlushInbound("1") *>
         channel.processTasksUntil(!channel.underlying.outboundMessages().isEmpty) *>
-        channel.readOutbound[Int].map(_ shouldEqual 1).void
+        channel.readOutbound[String].map(_ shouldEqual "1").void
     }
   }
 
@@ -250,24 +275,50 @@ class NettyToCatsEffectRuntimeHandlerSpec extends BaseSpec with BeforeAndAfterAl
       val mutation = Deferred.unsafe[IO, Unit]
       val resultStr = Deferred.unsafe[IO, String]
 
-      val mutatingHandler = ChannelHandlerF.onlyChannelRead[IO, Int]((_, ctx) => {
-        // Typically, the handler would turn off autoread and turn it back on after handler
-        // is installed, but we mimic w/ deferred.
-        val pipeline = ctx.pipeline()
-        for {
-          _ <- IO(pipeline.remove("testHandler"))
-          handler <- ChannelHandlerF.asNetty[IO, String](
-            ChannelHandlerF.onlyChannelRead[IO, String]((str, _) => resultStr.complete(str).void)
-          )
-          _ <- IO(pipeline.addLast("otherHandler", handler))
-          _ <- mutation.complete(())
-        } yield ()
-      })
-
+      val mutatingHandler = new NettyToCatsEffectRuntimeHandler[IO, String]() {
+        override def channelReadF(msg: String)(implicit ctx: ChannelHandlerContext): IO[Unit] = {
+          // Typically, the handler would turn off autoread and turn it back on after handler
+          // is installed, but we mimic w/ deferred.
+          val pipeline = ctx.pipeline()
+          for {
+            _ <- IO(pipeline.remove("testHandler"))
+            handler <- IO(new NettyToCatsEffectRuntimeHandler[IO, String]() {
+              override def channelReadF(msg: String)(implicit
+                ctx: ChannelHandlerContext
+              ): IO[Unit] = resultStr.complete(msg).void
+              override protected def userEventTriggeredF(evt: AnyRef)(implicit
+                ctx: ChannelHandlerContext
+              ): IO[Unit] = IO.unit
+              override protected def exceptionCaughtF(cause: Throwable)(implicit
+                ctx: ChannelHandlerContext
+              ): IO[Unit] = IO.unit
+              override protected def channelWritabilityChangedF(isWriteable: Boolean)(implicit
+                ctx: ChannelHandlerContext
+              ): IO[Unit] = IO.unit
+              override protected def channelInactiveF(implicit
+                ctx: ChannelHandlerContext
+              ): IO[Unit] = IO.unit
+            })
+            _ <- IO(pipeline.addLast("otherHandler", handler))
+            _ <- mutation.complete(())
+          } yield ()
+        }
+        override protected def userEventTriggeredF(evt: AnyRef)(implicit
+          ctx: ChannelHandlerContext
+        ): IO[Unit] = IO.unit
+        override protected def exceptionCaughtF(cause: Throwable)(implicit
+          ctx: ChannelHandlerContext
+        ): IO[Unit] = IO.unit
+        override protected def channelWritabilityChangedF(isWriteable: Boolean)(implicit
+          ctx: ChannelHandlerContext
+        ): IO[Unit] = IO.unit
+        override protected def channelInactiveF(implicit ctx: ChannelHandlerContext): IO[Unit] =
+          IO.unit
+      }
       makeEmbeddedChannelIO(mutatingHandler)
         .use { ch =>
           resultStr.tryGet.map(_ shouldBe none[String]) *>
-            ch.writeAndFlushInbound(1) *>
+            ch.writeAndFlushInbound("1") *>
             mutation.get *>
             ch.runPendingTasksUntil(ch.underlying.pipeline().names().contains("otherHandler")) *>
             IO(ch.underlying.pipeline().names() should contain("otherHandler")) *>
@@ -304,17 +355,14 @@ object NettyToCatsEffectRuntimeHandlerSpec {
     Dispatcher.parallel[IO].allocated.unsafeRunSync()
 
   private def makeEmbeddedChannelIO[A](
-    handler: ChannelHandlerF[IO, A],
-    logger: Logger = LoggerFactory.getLogger(getClass)
+    handler: NettyToCatsEffectRuntimeHandler[IO, A]
   ): Resource[IO, EmbeddedChannelF[IO]] =
     Resource.make(
       IO.defer {
         val ch = EmbeddedChannelF[IO](
           generalDispatcher,
           (_: EmbeddedChannel) =>
-            ChannelHandlerF
-              .asNetty(handler, logger)
-              .map(NettyToCatsChannelInitializer.Handlers[IO]("testHandler", _))
+            IO(NettyToCatsChannelInitializer.Handlers[IO]("testHandler", handler))
         )
 
         ch.waitForBackpressure.as(ch)
@@ -343,59 +391,57 @@ object NettyToCatsEffectRuntimeHandlerSpec {
       )
     )
 
-  private[NettyToCatsEffectRuntimeHandlerSpec] abstract class QueueingHandler[I](
-    onRead: I => IO[Unit] = (_: I) => IO.unit
-  ) extends ChannelHandlerF[IO, I] {
-    val messages: mutable.Queue[I] = mutable.Queue.empty[I]
+  private[NettyToCatsEffectRuntimeHandlerSpec] class QueueingHandler(
+    onRead: String => IO[Unit] = (_: String) => IO.unit
+  ) extends NettyToCatsEffectRuntimeHandler[IO, String] {
+    val messages: mutable.Queue[String] = mutable.Queue.empty[String]
     val events: mutable.Queue[AnyRef] = mutable.Queue.empty[AnyRef]
     val exceptions: mutable.Queue[Throwable] = mutable.Queue.empty[Throwable]
     val closes: mutable.Queue[Unit] = mutable.Queue.empty[Unit]
     val actions: mutable.Queue[Any] = mutable.Queue.empty[Any]
 
-    override def channelRead(msg: I)(implicit ctx: ChannelHandlerContext): IO[Unit] =
+    override def channelReadF(msg: String)(implicit ctx: ChannelHandlerContext): IO[Unit] =
       onRead(msg) *> IO(messages.enqueue(msg)) *> IO(actions.enqueue(msg))
 
-    override def userEventTriggered(evt: AnyRef)(implicit
+    override def userEventTriggeredF(evt: AnyRef)(implicit
       ctx: ChannelHandlerContext
     ): IO[Unit] = IO(events.enqueue(evt)) *> IO(actions.enqueue(evt))
 
-    override def exceptionCaught(cause: Throwable)(implicit
+    override def exceptionCaughtF(cause: Throwable)(implicit
       ctx: ChannelHandlerContext
     ): IO[Unit] = IO(exceptions.enqueue(cause)) *> IO(actions.enqueue(cause))
 
-    override def channelWritabilityChanged(isWriteable: Boolean)(implicit
+    override def channelWritabilityChangedF(isWriteable: Boolean)(implicit
       ctx: ChannelHandlerContext
     ): IO[Unit] = IO.unit
 
-    override def channelInactive(implicit context: ChannelHandlerContext): IO[Unit] =
+    override def channelInactiveF(implicit context: ChannelHandlerContext): IO[Unit] =
       IO(closes.enqueue(())) *> IO(actions.enqueue(()))
   }
 
-  object QueueingHandler {
-    def apply[I](onRead: I => IO[Unit] = (_: I) => IO.unit): QueueingHandler[I] =
-      new QueueingHandler[I](onRead) {}
-  }
+  private class ErrorHandler(logger: Logger)
+      extends NettyToCatsEffectRuntimeHandler[IO, Any](logger) {
 
-  private class ErrorHandler extends ChannelHandlerF[IO, Any] {
+    import ErrorHandler._
 
-    override def channelRead(msg: Any)(implicit ctx: ChannelHandlerContext): IO[Unit] =
+    override def channelReadF(msg: Any)(implicit ctx: ChannelHandlerContext): IO[Unit] =
       IO.raiseError(TestError("read"))
 
-    override def userEventTriggered(evt: AnyRef)(implicit
+    override def userEventTriggeredF(evt: AnyRef)(implicit
       ctx: ChannelHandlerContext
     ): IO[Unit] =
       IO.raiseError(TestError("user event"))
 
-    override def exceptionCaught(cause: Throwable)(implicit
+    override def exceptionCaughtF(cause: Throwable)(implicit
       ctx: ChannelHandlerContext
     ): IO[Unit] =
       IO.raiseError(TestError("exception caught"))
 
-    override def channelWritabilityChanged(isWriteable: Boolean)(implicit
+    override def channelWritabilityChangedF(isWriteable: Boolean)(implicit
       ctx: ChannelHandlerContext
     ): IO[Unit] = IO.raiseError(TestError("writability"))
 
-    override def channelInactive(implicit ctx: ChannelHandlerContext): IO[Unit] =
+    override def channelInactiveF(implicit ctx: ChannelHandlerContext): IO[Unit] =
       IO.raiseError(TestError("close"))
   }
 
@@ -403,7 +449,7 @@ object NettyToCatsEffectRuntimeHandlerSpec {
     final case class TestError(msg: String) extends Throwable(msg) with NoStackTrace
   }
 
-  private def generateAllPossibleSequences(arr: List[Int]): List[List[Action]] = {
+  private def generateAllPossibleSequences(arr: List[String]): List[List[Action]] = {
     val maxDepth = arr.length - 1
     def inner(branch: Int, depth: Int, l: List[Action]): List[List[Action]] = {
       val next = branch match {
@@ -426,9 +472,9 @@ object NettyToCatsEffectRuntimeHandlerSpec {
   sealed abstract class Action extends Product with Serializable
 
   object Action {
-    final case class Read(i: Int) extends Action
-    final case class UserEvent(i: Int) extends Action
-    final case class Throw(i: Int) extends Action
+    final case class Read(i: String) extends Action
+    final case class UserEvent(i: String) extends Action
+    final case class Throw(i: String) extends Action
 
   }
 

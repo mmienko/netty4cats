@@ -9,7 +9,7 @@ import io.netty.channel.unix.Errors.NativeIoException
 import io.netty.handler.codec.http.websocketx._
 import org.slf4j.{Logger, LoggerFactory, MDC}
 
-import cats.netty.channel.ChannelHandlerF
+import cats.netty.channel.NettyToCatsEffectRuntimeHandler
 import cats.netty.http.Logging
 
 @SuppressWarnings(
@@ -26,11 +26,11 @@ class WebSocketHandler[F[_]](
   webSocket: NettyWebSocket[F],
   wsListener: WebSocketListener[F]
 )(implicit F: Sync[F])
-    extends ChannelHandlerF[F, WebSocketFrame] {
+    extends NettyToCatsEffectRuntimeHandler[F, WebSocketFrame] {
 
   private lazy val logger: Logger = LoggerFactory.getLogger(getClass)
 
-  override def channelRead(
+  override def channelReadF(
     frame: WebSocketFrame
   )(implicit ctx: ChannelHandlerContext): F[Unit] =
     frame match {
@@ -53,12 +53,12 @@ class WebSocketHandler[F[_]](
           }
     }
 
-  override def channelWritabilityChanged(isWriteable: Boolean)(implicit
+  override def channelWritabilityChangedF(isWriteable: Boolean)(implicit
     ctx: ChannelHandlerContext
   ): F[Unit] =
     wsListener.handleWritabilityChange()
 
-  override def userEventTriggered(
+  override def userEventTriggeredF(
     evt: AnyRef
   )(implicit ctx: ChannelHandlerContext): F[Unit] = {
     evt match {
@@ -87,7 +87,7 @@ class WebSocketHandler[F[_]](
     Logging.MDC.putServerName(serverName)
   }
 
-  override def exceptionCaught(
+  override def exceptionCaughtF(
     cause: Throwable
   )(implicit ctx: ChannelHandlerContext): F[Unit] =
     cause match {
@@ -143,7 +143,7 @@ class WebSocketHandler[F[_]](
         }
     }
 
-  override def channelInactive(implicit context: ChannelHandlerContext): F[Unit] =
+  override def channelInactiveF(implicit context: ChannelHandlerContext): F[Unit] =
     for {
       reason <- webSocket.getCloseReason.map(
         _.getOrElse(

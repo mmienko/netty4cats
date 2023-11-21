@@ -48,7 +48,8 @@ lazy val core = (project in file("core"))
       Wart.FinalCaseClass,
       Wart.ExplicitImplicitTypes
     ),
-    wartremoverExcluded += sourceManaged.value
+    wartremoverExcluded += sourceManaged.value,
+    scalacOptions += "-Ywarn-unused"
   )
 
 lazy val demo = (project in file("demo"))
@@ -70,5 +71,6 @@ lazy val demo = (project in file("demo"))
       Wart.FinalCaseClass,
       Wart.ExplicitImplicitTypes
     ),
-    wartremoverExcluded += sourceManaged.value
+    wartremoverExcluded += sourceManaged.value,
+    scalacOptions += "-Ywarn-unused"
   )

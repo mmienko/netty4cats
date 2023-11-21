@@ -19,7 +19,7 @@ import io.netty.handler.timeout.{IdleState, IdleStateEvent}
 import org.slf4j.{Logger, LoggerFactory, MDC}
 
 import cats.netty.NettySyntax._
-import cats.netty.channel.ChannelHandlerF
+import cats.netty.channel.NettyToCatsEffectRuntimeHandler
 import cats.netty.http.HttpHandler._
 import cats.netty.http.HttpServer.HttpReadTimeoutHandler
 import cats.netty.http.websocket.{NettyWebSocket, WebSocketConfig, WebSocketHandler, WebSocketSession}
@@ -39,12 +39,12 @@ class HttpHandler[F[_]](
   controllers: List[HttpController[F]],
   supervisor: Supervisor[F]
 )(implicit F: Async[F])
-    extends ChannelHandlerF[F, FullHttpRequest] {
+    extends NettyToCatsEffectRuntimeHandler[F, FullHttpRequest] {
 
   private val logger: Logger =
     LoggerFactory.getLogger(this.getClass)
 
-  override def channelRead(
+  override def channelReadF(
     request: FullHttpRequest
   )(implicit ctx: ChannelHandlerContext): F[Unit] =
     F.bracket(F.unit)(_ =>
@@ -87,7 +87,7 @@ class HttpHandler[F[_]](
       _ <- logWarn(request, status, "Failed to decode HTTP request")(request.decoderResult().cause)
     } yield status
 
-  override def userEventTriggered(
+  override def userEventTriggeredF(
     evt: AnyRef
   )(implicit ctx: ChannelHandlerContext): F[Unit] = evt match {
     case idleStateEvent: IdleStateEvent if idleStateEvent.state() == IdleState.READER_IDLE =>
@@ -104,7 +104,7 @@ class HttpHandler[F[_]](
       } *> send500AndClose()
   }
 
-  override def exceptionCaught(
+  override def exceptionCaughtF(
     cause: Throwable
   )(implicit ctx: ChannelHandlerContext): F[Unit] = {
     cause match {
@@ -128,11 +128,11 @@ class HttpHandler[F[_]](
     }
   }
 
-  override def channelWritabilityChanged(isWriteable: Boolean)(implicit
+  override def channelWritabilityChangedF(isWriteable: Boolean)(implicit
     ctx: ChannelHandlerContext
   ): F[Unit] = F.unit
 
-  override def channelInactive(implicit ctx: ChannelHandlerContext): F[Unit] = F.unit
+  override def channelInactiveF(implicit ctx: ChannelHandlerContext): F[Unit] = F.unit
 
   private def routeRequestToController(
     request: FullHttpRequest,
@@ -219,10 +219,8 @@ class HttpHandler[F[_]](
               ctx.channel(),
               ctx.executor()
             )
-            handler <- ctx.addLast(
-              wsHandlerName,
-              WebSocketHandler(configs.serverName, webSocket, webSocketSession)
-            )
+            handler <- F.delay(WebSocketHandler(configs.serverName, webSocket, webSocketSession))
+            _ <- ctx.addLast(wsHandlerName, handler)
             wsCtx <- ctx.getContext(handler)
             _ <- F.whenA(wsCtx == null)(handleClosedWebSocket(request, webSocketSession, response))
 

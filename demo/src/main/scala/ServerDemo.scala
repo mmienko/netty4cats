@@ -5,8 +5,8 @@ import io.netty.buffer.ByteBuf
 import io.netty.channel.ChannelHandlerContext
 import io.netty.channel.socket.ServerSocketChannel
 
-import cats.netty.channel.ChannelHandlerAdapterF
 import cats.netty.channel.NettyToCatsChannelInitializer.Handlers
+import cats.netty.channel.NettyToCatsEffectRuntimeHandler
 
 object ServerDemo extends IOApp {
 
@@ -28,9 +28,23 @@ object ServerDemo extends IOApp {
       )
     } yield ()).useForever.as(ExitCode.Success)
 
-  class EchoHandler extends ChannelHandlerAdapterF[IO, ByteBuf] {
-    override def channelRead(msg: ByteBuf)(implicit ctx: ChannelHandlerContext): IO[Unit] = IO(
+  class EchoHandler extends NettyToCatsEffectRuntimeHandler[IO, ByteBuf] {
+    override def channelReadF(msg: ByteBuf)(implicit ctx: ChannelHandlerContext): IO[Unit] = IO(
       ctx.writeAndFlush(msg)
     ).void
+
+    override protected def userEventTriggeredF(evt: AnyRef)(implicit
+      ctx: ChannelHandlerContext
+    ): IO[Unit] = IO.unit
+
+    override protected def exceptionCaughtF(cause: Throwable)(implicit
+      ctx: ChannelHandlerContext
+    ): IO[Unit] = IO.unit
+
+    override protected def channelWritabilityChangedF(isWriteable: Boolean)(implicit
+      ctx: ChannelHandlerContext
+    ): IO[Unit] = IO.unit
+
+    override protected def channelInactiveF(implicit ctx: ChannelHandlerContext): IO[Unit] = IO.unit
   }
 }

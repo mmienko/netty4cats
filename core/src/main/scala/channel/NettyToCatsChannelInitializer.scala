@@ -37,10 +37,16 @@ class NettyToCatsChannelInitializer[F[_]: Async, C <: Channel](
          * We ignore Dispatcher's finalizer in `await=true` mode, since all it does is:
          *  - shutdown the dispatcher
          *  - join all fibers (in supervisor)
-         * If we had the finalizer, we would run it on channel closed, but that case is a no-op, i.e. either way the
-         * fibers run until they are finished. Using finalizer instead introduces potential bugs and ties up resources.
+         * Ignore finalizer from Dispatcher resource as all it does is wait for fibers to join. This is effectively
+         * a no-op since we never cancel fibers (await=true). This aligns with Netty's ChannelHandler model, which
+         * offers single threaded semantics with no cancellation. The dispatcher is analogous to Java's ExecutorService,
+         * where we simply submit tasks and forget. Dispatcher keeps track of Fibers via Supervisor, but
+         * cleanup after themselves when they are finished. This is another reason why higher layers should process
+         * Netty ChannelHandler actions in a semantically non-blocking way (to be able to respond to newer Netty
+         * events).
          */
         inboundDisp <- Dispatcher.sequential[F](await = true).allocated.map(_._1)
+
         _ <- Async[F].delay(attr.set(inboundDisp))
 
         handlers <- onNewConnection(ch)
@@ -55,7 +61,7 @@ class NettyToCatsChannelInitializer[F[_]: Async, C <: Channel](
             pipeline.addLastF(name, handler)
         }
 
-        _ <- handlers.finalHandler.traverse_(pipeline.addLast(_))
+        _ <- handlers.finalHandler.traverse_(pipeline.addLastF(_))
 
         _ <- ch.setAutoRead(true)
       } yield ()
@@ -71,21 +77,21 @@ object NettyToCatsChannelInitializer {
   type OnNewConnection[F[_], C <: Channel] = C => F[Handlers[F]]
 
   final case class Handlers[F[_]](
-    value: Ior[NonEmptyList[PipelineMutation], ChannelHandlerF[F, _]]
+    value: Ior[NonEmptyList[PipelineMutation], NettyToCatsEffectRuntimeHandler[F, _]]
   ) {
     def pipelineMutations: List[PipelineMutation] = value.left.toList.flatMap(_.toList)
-    def finalHandler: Option[ChannelHandlerF[F, _]] = value.right
+    def finalHandler: Option[NettyToCatsEffectRuntimeHandler[F, _]] = value.right
   }
 
   object Handlers {
     def apply[F[_]](
       mutations: NonEmptyList[PipelineMutation],
-      handler: ChannelHandlerF[F, _]
+      handler: NettyToCatsEffectRuntimeHandler[F, _]
     ): Handlers[F] = Handlers(Ior.both(mutations, handler))
 
     def apply[F[_]](
       mutations: List[PipelineMutation],
-      handler: ChannelHandlerF[F, _]
+      handler: NettyToCatsEffectRuntimeHandler[F, _]
     ): Handlers[F] =
       NonEmptyList.fromList(mutations).fold(fromHandler(handler))(apply(_, handler))
 
@@ -95,7 +101,7 @@ object NettyToCatsChannelInitializer {
     def apply[F[_]](name: String, handler: ChannelHandler): Handlers[F] =
       apply(NonEmptyList.one(PipelineMutation.AddByName(name, handler)))
 
-    def apply[F[_]](handler: ChannelHandlerF[F, _]): Handlers[F] =
+    def apply[F[_]](handler: NettyToCatsEffectRuntimeHandler[F, _]): Handlers[F] =
       fromHandler(handler)
 
     def apply[F[_]](mutations: NonEmptyList[PipelineMutation]): Handlers[F] =
@@ -104,7 +110,7 @@ object NettyToCatsChannelInitializer {
     def fromPipelineMutations[F[_]](mutations: NonEmptyList[PipelineMutation]): Handlers[F] =
       Handlers(Ior.left(mutations))
 
-    def fromHandler[F[_]](handler: ChannelHandlerF[F, _]): Handlers[F] =
+    def fromHandler[F[_]](handler: NettyToCatsEffectRuntimeHandler[F, _]): Handlers[F] =
       Handlers(Ior.right(handler))
   }
 
